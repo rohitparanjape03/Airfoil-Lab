@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Airfoil Lab — Lift & Drag Explorer</title>
+<style>
+:root{--bg:#08111f;--panel:#101d31;--panel2:#0c1728;--text:#eaf2ff;--muted:#91a4bf;--accent:#58b8ff;--accent2:#7cf0c7;--line:#223552}
+*{box-sizing:border-box} body{margin:0;font-family:Georgia,'Times New Roman',serif;background:#08111f;color:var(--text)}
+.app{max-width:1250px;margin:auto;padding:28px}.hero{display:flex;justify-content:space-between;gap:20px;align-items:end;margin-bottom:22px}.eyebrow{color:var(--accent2);font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase}.hero h1{font-size:clamp(28px,4vw,48px);margin:6px 0}.hero p{color:var(--muted);max-width:700px;margin:0;line-height:1.55}
+.grid{display:grid;grid-template-columns:330px 1fr;gap:18px}.card{background:linear-gradient(145deg,rgba(16,29,49,.96),rgba(9,20,35,.96));border:1px solid var(--line);border-radius:18px;box-shadow:0 15px 45px #0004}.controls{padding:20px}.control{margin:18px 0}.row{display:flex;justify-content:space-between;gap:10px;align-items:center}.label{font-weight:700}.value{font-variant-numeric:tabular-nums;color:var(--accent)}input[type=range]{width:100%;accent-color:var(--accent);margin-top:10px}button{border:1px solid #315070;background:#122943;color:var(--text);padding:9px 12px;border-radius:10px;cursor:pointer}button:hover{background:#193653}.presets{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.main{overflow:hidden}.canvasWrap{position:relative;background:#07101c;border-bottom:1px solid var(--line)}canvas{display:block;width:100%;height:600px}.legend{position:absolute;left:16px;top:14px;background:#07101dcc;border:1px solid #203550;padding:10px 12px;border-radius:10px;color:var(--muted);font-size:12px}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--line)}.metric{padding:17px;background:var(--panel2)}.metric span{display:block;color:var(--muted);font-size:12px}.metric strong{font-size:24px;margin-top:5px;display:block}.explain{padding:20px}.formula{font-family:ui-monospace,monospace;background:#07101c;border:1px solid var(--line);padding:13px;border-radius:10px;color:#b9d9ff}.note{color:var(--muted);line-height:1.6;font-size:14px}
+@media(max-width:850px){.grid{grid-template-columns:1fr}.hero{display:block}.metrics{grid-template-columns:repeat(2,1fr)}canvas{height:480px}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="hero">
+    <div><div class="eyebrow">Interactive aerospace physics</div><h1>Airfoil Lab</h1><p>Shape a wing, change the wind, and watch a simplified flow-field model turn aerodynamic ideas into something you can see.</p></div>
+    <button id="reset">Reset experiment</button>
+  </header>
+
+  <div class="grid">
+    <aside class="card controls">
+      <div class="control"><div class="row"><span class="label">Camber</span><span class="value" id="camberVal">6%</span></div><input id="camber" type="range" min="0" max="14" value="6" step=".5"></div>
+      <div class="control"><div class="row"><span class="label">Thickness</span><span class="value" id="thicknessVal">12%</span></div><input id="thickness" type="range" min="6" max="20" value="12" step=".5"></div>
+      <div class="control"><div class="row"><span class="label">Wind speed</span><span class="value" id="speedVal">30 m/s</span></div><input id="speed" type="range" min="5" max="80" value="30"></div>
+      <div class="control"><div class="row"><span class="label">Angle of attack</span><span class="value" id="aoaVal">4°</span></div><input id="aoa" type="range" min="-6" max="14" value="4" step=".5"></div>
+      <div class="control"><div class="row"><span class="label">Flow lines</span><span class="value" id="densityVal">22</span></div><input id="density" type="range" min="8" max="35" value="22"></div>
+      <div class="control"><div class="label">Presets</div><div class="presets">
+        <button data-preset="flat">Flat plate</button><button data-preset="cambered">Cambered</button><button data-preset="fast">Fast wind</button>
+      </div></div>
+      <p class="note">This is an educational visualization, not a CFD solver. The lift/drag estimates are intentionally simplified so you can explore relationships without needing professional software.</p>
+    </aside>
+
+    <main class="card main">
+      <div class="canvasWrap"><canvas id="flow"></canvas><div class="legend">→ airflow &nbsp; • &nbsp; blue = lift &nbsp; • &nbsp; orange = drag</div></div>
+      <section class="metrics">
+        <div class="metric"><span>Lift coefficient C<sub>L</sub></span><strong id="cl">0.00</strong></div>
+        <div class="metric"><span>Drag coefficient C<sub>D</sub></span><strong id="cd">0.00</strong></div>
+        <div class="metric"><span>Lift force</span><strong id="lift">0 N</strong></div>
+        <div class="metric"><span>Drag force</span><strong id="drag">0 N</strong></div>
+      </section>
+      <section class="explain">
+        <h2>What you're seeing</h2>
+        <p class="note">Increasing wind speed increases aerodynamic force strongly because dynamic pressure scales with <b>V²</b>. Camber and angle of attack change the estimated lift coefficient. Drag includes a simple profile term plus an induced-drag term.</p>
+        <div class="formula">L = ½ρV²S C<sub>L</sub> &nbsp;&nbsp; | &nbsp;&nbsp; D = ½ρV²S C<sub>D</sub></div>
+      </section>
+    </main>
+  </div>
+</div>
+
+<script>
+const $=id=>document.getElementById(id), c=$('flow'), ctx=c.getContext('2d');
+const state={camber:6,thickness:12,speed:30,aoa:4,density:22,t:0};
+const rho=1.225, area=1.2;
+
+function calc(){
+  const cam=state.camber/100, a=state.aoa*Math.PI/180;
+  // Educational approximation: baseline lift slope + camber offset, gently capped.
+  let cl=2*Math.PI*(a+0.55*cam);
+  cl*=Math.max(.45,1-.015*Math.max(0,state.aoa-10)**2);
+  const cd0=.018 + .08*Math.pow(state.thickness/100-.10,2)/.01;
+  const cdi=.045*cl*cl;
+  const cd=cd0+cdi;
+  const q=.5*rho*state.speed**2;
+  return {cl,cd,L:q*area*cl,D:q*area*cd};
+}
+function update(){
+  $('camberVal').textContent=state.camber+'%'; $('thicknessVal').textContent=state.thickness+'%';
+  $('speedVal').textContent=state.speed+' m/s'; $('aoaVal').textContent=state.aoa+'°'; $('densityVal').textContent=state.density;
+  const x=calc(); $('cl').textContent=x.cl.toFixed(2); $('cd').textContent=x.cd.toFixed(3);
+  $('lift').textContent=Math.round(x.L).toLocaleString()+' N'; $('drag').textContent=Math.round(x.D).toLocaleString()+' N';
+}
+['camber','thickness','speed','aoa','density'].forEach(k=>$(k).addEventListener('input',e=>{state[k]=+e.target.value;update()}));
+$('reset').onclick=()=>{Object.assign(state,{camber:6,thickness:12,speed:30,aoa:4,density:22});sync()};
+document.querySelectorAll('[data-preset]').forEach(b=>b.onclick=()=>{
+  const p=b.dataset.preset;
+  if(p==='flat')Object.assign(state,{camber:0,thickness:10,speed:20,aoa:2});
+  if(p==='cambered')Object.assign(state,{camber:10,thickness:13,speed:30,aoa:5});
+  if(p==='fast')Object.assign(state,{camber:6,thickness:12,speed:70,aoa:4});
+  sync();
+});
+function sync(){['camber','thickness','speed','aoa','density'].forEach(k=>$(k).value=state[k]);update()}
+
+function resize(){const r=c.getBoundingClientRect(),d=devicePixelRatio||1;c.width=r.width*d;c.height=r.height*d;ctx.setTransform(d,0,0,d,0,0)}
+window.addEventListener('resize',resize); resize(); sync();
+
+function airfoil(x){
+  // NACA-like educational shape using camber + thickness.
+  const t=state.thickness/100, m=state.camber/100, p=.4;
+  let yc,dy;
+  if(m===0){yc=0;dy=0}else if(x<p){yc=m/(p*p)*(2*p*x-x*x);dy=2*m/(p*p)*(p-x)}
+  else{yc=m/((1-p)**2)*((1-2*p)+2*p*x-x*x);dy=2*m/((1-p)**2)*(p-x)}
+  const yt=5*t*(.2969*Math.sqrt(Math.max(x,0))-.1260*x-.3516*x*x+.2843*x*x*x-.1015*x*x*x*x);
+  const th=Math.atan(dy), xu=x-yt*Math.sin(th), yu=yc+yt*Math.cos(th), xl=x+yt*Math.sin(th), yl=yc-yt*Math.cos(th);
+  return {xu,yu,xl,yl};
+}
+function draw(){
+  const W=c.clientWidth,H=c.clientHeight;
+  ctx.clearRect(0,0,W,H);
+
+  // Background grid
+  ctx.strokeStyle='#142942'; ctx.lineWidth=1;
+  for(let x=0;x<W;x+=50){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,H);ctx.stroke()}
+  for(let y=0;y<H;y+=50){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke()}
+
+  // Large, obvious airfoil in the center.
+  const chord=Math.min(W*.62,620);
+  const xStart=(W-chord)/2;
+  const y0=H*.54;
+
+  // Flow lines: visibly split and bend around the wing.
+  const n=state.density;
+  for(let i=0;i<n;i++){
+    const base=55+i*(H-110)/(n-1);
+    const phase=(state.t*.7+i*.13)%1;
+    ctx.beginPath();
+    for(let j=0;j<=150;j++){
+      let px=-100+j*(W+200)/150;
+      let yy=base;
+      const rel=(px-(xStart+chord*.5))/(chord*.55);
+      const influence=Math.exp(-rel*rel*3.2);
+      const nearWing=Math.exp(-Math.pow((base-y0)/(chord*.22),2))*influence;
+
+      // Flow is displaced upward/downward around the airfoil.
+      yy += -state.camber*2.0*nearWing;
+      yy += -state.aoa*1.7*influence;
+
+      px += phase*120;
+      px=((px+W+100)%(W+200))-100;
+
+      if(j===0)ctx.moveTo(px,yy); else ctx.lineTo(px,yy);
+    }
+    ctx.strokeStyle='#39759d';
+    ctx.lineWidth=1.5;
+    ctx.stroke();
+
+    // Direction arrows on some flow lines
+    if(i%4===0){
+      const ax=((state.t*70+i*73)%(W-100))+50;
+      const ay=base;
+      ctx.strokeStyle='#63b9e8'; ctx.fillStyle='#63b9e8'; ctx.lineWidth=1.5;
+      ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(ax+15,ay);ctx.stroke();
+      ctx.beginPath();ctx.moveTo(ax+15,ay);ctx.lineTo(ax+9,ay-4);ctx.lineTo(ax+9,ay+4);ctx.closePath();ctx.fill();
+    }
+  }
+
+  // Airfoil geometry.
+  ctx.save();
+  ctx.translate(xStart,y0);
+  ctx.rotate(-state.aoa*Math.PI/180);
+
+  ctx.beginPath();
+  for(let i=0;i<=100;i++){
+    const q=airfoil(i/100),xx=q.xu*chord,yy=-q.yu*chord;
+    if(i===0)ctx.moveTo(xx,yy);else ctx.lineTo(xx,yy);
+  }
+  for(let i=100;i>=0;i--){
+    const q=airfoil(i/100);
+    ctx.lineTo(q.xl*chord,-q.yl*chord);
+  }
+  ctx.closePath();
+
+  // Strong wing fill + outline.
+  ctx.shadowColor='#58b8ff';
+  ctx.shadowBlur=18;
+  ctx.fillStyle='#dff3ff';
+  ctx.fill();
+  ctx.shadowBlur=0;
+  ctx.strokeStyle='#ffffff';
+  ctx.lineWidth=4;
+  ctx.stroke();
+
+  // Chord line
+  ctx.strokeStyle='#6c8da8';
+  ctx.lineWidth=1;
+  ctx.setLineDash([7,6]);
+  ctx.beginPath();ctx.moveTo(0,0);ctx.lineTo(chord,0);ctx.stroke();
+  ctx.setLineDash([]);
+
+  ctx.restore();
+
+  // Labels
+  ctx.fillStyle='#ffffff';
+  ctx.font='700 18px system-ui';
+  ctx.fillText('YOUR AIRFOIL',xStart+20,y0-75);
+  ctx.fillStyle='#9fb4ce';
+  ctx.font='13px system-ui';
+  ctx.fillText('Adjust camber, thickness and angle of attack →',xStart+20,y0-52);
+
+  // Force vectors
+  const a=calc();
+  const vx=xStart+chord*.52, vy=y0;
+  const liftLen=Math.max(45,Math.min(170,Math.abs(a.L)/35));
+  const dragLen=Math.max(35,Math.min(130,Math.abs(a.D)/15));
+
+  if(a.L>=0) arrow(vx,vy,vx,vy-liftLen,'#63c4ff');
+  else arrow(vx,vy,vx,vy+liftLen,'#63c4ff');
+  arrow(vx,vy,vx+dragLen,vy,'#ffb36b');
+
+  ctx.font='700 14px system-ui';
+  ctx.fillStyle='#63c4ff';
+  ctx.fillText('LIFT',vx+10,vy-liftLen+5);
+  ctx.fillStyle='#ffb36b';
+  ctx.fillText('DRAG',vx+dragLen-45,vy-12);
+
+  requestAnimationFrame(()=>{state.t+=.018;draw()});
+}
+function arrow(x1,y1,x2,y2,color){
+ ctx.strokeStyle=color;ctx.fillStyle=color;ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+ const ang=Math.atan2(y2-y1,x2-x1),s=9;ctx.beginPath();ctx.moveTo(x2,y2);ctx.lineTo(x2-s*Math.cos(ang-.45),y2-s*Math.sin(ang-.45));ctx.lineTo(x2-s*Math.cos(ang+.45),y2-s*Math.sin(ang+.45));ctx.closePath();ctx.fill();
+}
+draw();
+</script>
+</body>
+</html>
